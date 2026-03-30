@@ -33,7 +33,6 @@ module.exports = (io) => {
     console.log(`[Socket] Connected: ${userId} (${socket.id})`);
 
     //--------------------- webRTC ------------------------------
-    io.on('connection', (socket) => {
           console.log("User connected:", socket.id);
 
           // Send your ID to yourself so you know who you are
@@ -48,7 +47,6 @@ module.exports = (io) => {
           socket.on("answerCall", (data) => {
               io.to(data.to).emit("callAccepted", data.signal);
           });
-      });
     //---------------------  ------------------------------
 
     //
