@@ -59,24 +59,24 @@ const io = new Server(server, {
 
 app.use((req, _res, next) => { req.io = io; next(); });
 
-// require('./socketHandler')(io);
+require('./socketHandler')(io);
 //////////////////////
-io.on('connection', (socket) => {
-          console.log("User connected:", socket.id);
+// io.on('connection', (socket) => {
+//           console.log("User connected:", socket.id);
 
-          // Send your ID to yourself so you know who you are
-          socket.emit("me", socket.id);
+//           // Send your ID to yourself so you know who you are
+//           socket.emit("me", socket.id);
 
-          // Forward the call request to a specific user
-          socket.on("callUser", ({ userToCall, signalData, from }) => {
-              io.to(userToCall).emit("callUser", { signal: signalData, from });
-          });
+//           // Forward the call request to a specific user
+//           socket.on("callUser", ({ userToCall, signalData, from }) => {
+//               io.to(userToCall).emit("callUser", { signal: signalData, from });
+//           });
 
-          // Forward the answer back to the caller
-          socket.on("answerCall", (data) => {
-              io.to(data.to).emit("callAccepted", data.signal);
-          });
-      });
+//           // Forward the answer back to the caller
+//           socket.on("answerCall", (data) => {
+//               io.to(data.to).emit("callAccepted", data.signal);
+//           });
+//       });
 //////////////////////
 
 // seedInterests();

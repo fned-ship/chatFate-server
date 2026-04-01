@@ -32,23 +32,6 @@ module.exports = (io) => {
     const userId = socket.userId;
     console.log(`[Socket] Connected: ${userId} (${socket.id})`);
 
-    //--------------------- webRTC ------------------------------
-          console.log("User connected:", socket.id);
-
-          // Send your ID to yourself so you know who you are
-          socket.emit("me", socket.id);
-
-          // Forward the call request to a specific user
-          socket.on("callUser", ({ userToCall, signalData, from }) => {
-              io.to(userToCall).emit("callUser", { signal: signalData, from });
-          });
-
-          // Forward the answer back to the caller
-          socket.on("answerCall", (data) => {
-              io.to(data.to).emit("callAccepted", data.signal);
-          });
-    //---------------------  ------------------------------
-
     //
     socket.on('join', (userId) => {
         socket.join(userId);
@@ -57,6 +40,27 @@ module.exports = (io) => {
     // Join a personal room so we can target this user directly
     // (used by matchmaking partner_found event)
     socket.join(userId);
+
+    //--------------------- webRTC ------------------------------
+
+          // Send your ID to yourself so you know who you are
+          socket.emit("me", socket.id);
+
+          // Forward the call request to a specific user
+          socket.on("callUser", ({ userToCall, signalData, from }) => {
+            console.log(`[RTC] ${userId} is calling user room: ${userToCall}`);
+            // We emit to the target user's personal room (their userId)
+            io.to(userToCall).emit("callUser", { 
+                signal: signalData, 
+                from: userId // Pass the Database ID so the receiver knows WHO is calling
+            });
+          });
+
+          socket.on("answerCall", (data) => {
+            console.log(`[RTC] ${userId} answered call from: ${data.to}`);
+            io.to(data.to).emit("callAccepted", data.signal);
+          });
+    //---------------------  ------------------------------
 
     // ────────────────────────────────────────────────────────────────────────
     // FRIEND CHAT EVENTS
