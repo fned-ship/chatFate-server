@@ -42,6 +42,12 @@ module.exports = (io) => {
       io.to(data.to).emit('callAccepted', data.signal);
     });
 
+    // 
+    socket.on('callee_ready', ({ to }) => {
+      console.log(`[Signal] callee_ready: relaying to initiator ${to}`);
+      io.to(to).emit('callee_ready');
+    });
+
     // ── Friend chat ────────────────────────────────────────────────────────
 
     socket.on('join_chat', async ({ chatId }) => {
