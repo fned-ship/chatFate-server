@@ -60,7 +60,7 @@ const Match = (router,client) => {
             const io            = req.io;
 
             // ── 0. Fetch current user (Mongo) ────────────────────────────────────────
-            const currentUser = await User.findById(currentUserId).populate('interests');
+            const currentUser = await User.findById(currentUserId).populate('interests').select('-password -email -verificationToken');
             if (!currentUser) return res.status(404).json({ message: 'User not found' });
 
             // ── 1. Ban check ─────────────────────────────────────────────────────────
@@ -89,7 +89,10 @@ const Match = (router,client) => {
             let maxScore         = -1;
             let hasExactMatch    = false;
 
+            console.log("my interests : ",myInterests);
+
             for (const cand of candidates) {
+                // console.log("cand interests : ",cand.interests);
                 // ── Age-gap filter (±4 years) ──
                 if (myAge !== null && cand.birthDate) {
                 const candAge = ageFromDate(cand.birthDate);
@@ -153,7 +156,6 @@ const Match = (router,client) => {
                 .map((i) => i.name);
 
             const matchPayload = {
-                partnerId:       partnerEntry.userId,
                 scoreMatch:      result.maxScore,
                 commonInterests: common
             };
@@ -164,16 +166,19 @@ const Match = (router,client) => {
                   { path: 'hostId',  select: 'firstName lastName userName photo' },
                   { path: 'guestId', select: 'firstName lastName userName photo' }
                 ]);
+            const partner = await User.findById(partnerEntry.userId).select('-password -email -verificationToken');
 
             // Notify both users via Socket.io
             io.to(currentUserId.toString()).emit('partner_found', {
-                ...matchPayload,
+                matchPayload,
                 partnerId: partnerEntry.userId ,
+                partner ,
                 randomChat
             });
             io.to(partnerEntry.userId).emit('partner_found', {
-                ...matchPayload,
+                matchPayload,
                 partnerId: currentUserId.toString() , 
+                partner : currentUser ,
                 randomChat
             });
 
