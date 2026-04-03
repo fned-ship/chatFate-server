@@ -31,22 +31,22 @@ const port = process.env.PORT || 3001;
 
 //connect redis 
 
-// const client = createClient({
-//     username: process.env.REDISUSERNAME,
-//     password: process.env.REDISPASSWORD,
-//     socket: {
-//         host: process.env.REDISHOST,
-//         port: process.env.REDISPORT
-//     }
-// });
+const client = createClient({
+    username: process.env.REDISUSERNAME,
+    password: process.env.REDISPASSWORD,
+    socket: {
+        host: process.env.REDISHOST,
+        port: process.env.REDISPORT
+    }
+});
 
-// client.on('error', (err) => {
-//     console.error('Redis Client Error:', err);
-// });
+client.on('error', (err) => {
+    console.error('Redis Client Error:', err);
+});
 
-// client.connect()
-//     .then(() => console.log('Redis connected!'))
-//     .catch(err => console.log('Redis Connection Error', err));
+client.connect()
+    .then(() => console.log('Redis connected!'))
+    .catch(err => console.log('Redis Connection Error', err));
 
 //create socket
 
