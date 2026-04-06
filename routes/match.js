@@ -191,6 +191,7 @@ const Match = (router,client) => {
 
             res.status(200).json({ message: 'Still searching...' });
         } catch (error) {
+            console.log("-------")
             res.status(500).json({ error: error.message });
         }
     });

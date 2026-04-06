@@ -289,6 +289,28 @@ const removeFriend = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+/**
+ * GET /api/friends/requests
+ * Get all pending friend requests for the logged-in user.
+ */
+const getFriendRequests = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Find the user and populate the 'requests' array with specific fields
+    const user = await User.findById(userId)
+      .populate('requests', 'firstName lastName userName photo online');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    // Return the populated requests array (or an empty array if none)
+    res.status(200).json(user.requests || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
 
 // ── Router ────────────────────────────────────────────────────────────────────
 const UserRoutes = (router) => {
@@ -297,6 +319,7 @@ const UserRoutes = (router) => {
   router.put('/api/profile/interests', protect ,  editInterests);
 
   // Friends
+  router.get ('/api/friends/requests', protect, getFriendRequests);
   router.post  ('/api/friends/request/:targetId', protect ,  sendFriendRequest);
   router.post  ('/api/friends/accept/:requesterId', protect , acceptFriendRequest);
   router.delete('/api/friends/request/:requesterId', protect , declineFriendRequest);
