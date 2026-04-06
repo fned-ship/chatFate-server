@@ -82,7 +82,7 @@ require('./socketHandler')(io);
 // seedInterests();
 Auth(app);
 ReportRoutes(app);
-Match(app,client);
+// Match(app,client);
 UserRoutes(app);
 ChatRoutes(app);
 
