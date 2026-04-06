@@ -41,6 +41,7 @@ const deleteFile = (filePath) => {
   });
 };
 
+
 // ── Controllers ───────────────────────────────────────────────────────────────
 
 /**
@@ -187,6 +188,15 @@ const sendFriendRequest = async (req, res) => {
           $pull: { requests: senderId }
         })
       ]);
+
+      let chat = await Chat.findOne({
+        participants: { $all: [senderId, targetId], $size: 2 }
+      });
+    
+      if (!chat) {
+        chat = await Chat.create({ participants: [senderId, targetId] });
+      }
+
       return res.status(200).json({ message: 'You were already requested by this user — now friends!' });
     }
 
