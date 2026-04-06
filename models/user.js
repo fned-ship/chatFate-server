@@ -12,9 +12,9 @@ const userSchema = new mongoose.Schema({
   userName: { type: String, required: true, unique: true, index: true },
   email: { type: String, required: true, unique: true, index: true },
   password: { type: String, required: true },
-  birthDate: Date,
-  country: String,
-  photo: String,
+  birthDate: Date,  // required
+  country: String,  // we get the country of the user via his IP using an external api ( in the front-end )
+  photo: String, 
   verifiedAge: Date,
   numOfReports: { type: Number, default: 0 },
   totalReports: { type: Number, default: 0 },
@@ -23,14 +23,17 @@ const userSchema = new mongoose.Schema({
   verifiedPhoto: String,
   online: { type: Boolean, default: false },
   role: { type: String, enum: ['user', 'moderator'], default: 'user' },
-  sex: String,
+  sex: String, // either male or female or prefer not to say
   friends: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   requests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   interests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Interest' }],
 
 
   isVerified: { type: Boolean, default: false },
-  verificationToken: { type: String }
+  verificationToken: { type: String },
+
+  passwordResetToken:  { type: String },
+  passwordResetExpiry: { type: Date   },
 }, { timestamps: true });
 
 userSchema.methods.hasInterestRelatedTo = async function(searchCategory) {
