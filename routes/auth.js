@@ -189,16 +189,16 @@ const Auth = (router) => {
 
       const verificationUrl = `${process.env.SERVER_URL}/api/auth/verify/${verificationToken}`;
 
-      // await transporter.sendMail({
-      //   from: process.env.emailAdress,
-      //   to:   data.email,
-      //   subject: 'Verify your email address',
-      //   html: `
-      //     <h2>Welcome to ChatFate!</h2>
-      //     <p>Click below to verify your email address:</p>
-      //     <a href="${verificationUrl}" style="display:inline-block;padding:12px 24px;background:#6c63ff;color:#fff;border-radius:6px;text-decoration:none;">Verify Email</a>
-      //   `,
-      // });
+      await transporter.sendMail({
+        from: process.env.emailAdress,
+        to:   data.email,
+        subject: 'Verify your email address',
+        html: `
+          <h2>Welcome to ChatFate!</h2>
+          <p>Click below to verify your email address:</p>
+          <a href="${verificationUrl}" style="display:inline-block;padding:12px 24px;background:#6c63ff;color:#fff;border-radius:6px;text-decoration:none;">Verify Email</a>
+        `,
+      });
 
       res.status(201).json({ message: 'Check your email to verify your account.' });
     } catch (error) {

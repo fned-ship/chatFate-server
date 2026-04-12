@@ -28,6 +28,7 @@ const userSchema = new mongoose.Schema({
   requests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   interests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Interest' }],
 
+  history : [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], // users that talked to randomly
 
   isVerified: { type: Boolean, default: false },
   verificationToken: { type: String },
@@ -44,9 +45,19 @@ userSchema.methods.hasInterestRelatedTo = async function(searchCategory) {
   );
 };
 
+const ConnectionSchema = new mongoose.Schema({
+    // Store both to make the relationship queryable from either side
+    users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    createdAt: { type: Date, default: Date.now }
+});
+
+// index the users array for fast lookups
+ConnectionSchema.index({ users: 1 });
+
+const Connection = mongoose.model('Connection', ConnectionSchema);
 
 const Interest = mongoose.model('Interest', interestSchema);
 
 const User = mongoose.model('User', userSchema);
 
-module.exports = {User,Interest};
+module.exports = {User,Interest , Connection};

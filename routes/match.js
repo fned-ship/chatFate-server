@@ -1,4 +1,4 @@
-const { User } = require('../models/user');
+const { User , Connection } = require('../models/user');
 const {protect} = require("./auth");
 const { Chat, RandomChat, Message } = require('../models/chat');
 
@@ -42,15 +42,50 @@ const Match = (router,client) => {
         await client.hDel(WAITING_KEY, userId.toString());
     };
 
-    const getCandidates = async (currentUserId) => {
-        const all   = await client.hGetAll(WAITING_KEY);
+    const sameCategory = (birth1 , birth2)=>{
+        const age1=ageFromDate(birth1);
+        const age2=ageFromDate(birth2);
+        if( (age1<18 && age2>18 ) || (age2<18 && age1>18 )  ) return false ;
+        return true ;
+    }
+
+
+    const getCandidates = async (currentUser) => {
+        const currentUserId = currentUser._id.toString();
+
+        // 1. Fetch all userIds this user has already talked to
+        // We look for any connection where this user's ID exists in the 'users' array
+
+
+        // const connections = await Connection.find({ users: currentUser._id }).lean();
+        const talkedToIds = new Set();
+        // const talkedToIds = new Set();
+        // connections.forEach(conn => {
+        //     conn.users.forEach(id => {
+        //         if (id.toString() !== currentUserId) {
+        //             talkedToIds.add(id.toString());
+        //         }
+        //     });
+        // });
+
+        const all = await client.hGetAll(WAITING_KEY);
         const entries = [];
+
         for (const [uid, raw] of Object.entries(all)) {
-            if (uid !== currentUserId.toString()) {
-            entries.push(JSON.parse(raw));
+            // Skip self
+            if (uid === currentUserId) continue;
+
+            // 3. Check if they have talked before using our Set
+            if (talkedToIds.has(uid)) continue;
+
+            let cand = JSON.parse(raw);
+
+            // 4. Category logic
+            if (sameCategory(currentUser.birthDate, cand.birthDate)) {
+                entries.push(cand);
             }
         }
-        console.log(entries);
+
         return entries;
     };
 
@@ -82,7 +117,8 @@ const Match = (router,client) => {
 
             // ── 3. Core matching function ─────────────────────────────────────────────
             const performMatch = async () => {
-            const candidates = await getCandidates(currentUserId);
+            const candidates = await getCandidates(currentUser);
+            // console.log('conds : ',candidates) ;
             if (candidates.length === 0) return null;
 
             let bestMatch        = null;
@@ -185,6 +221,10 @@ const Match = (router,client) => {
             // Remove both from Redis waiting room
             await removeFromWaitingRoom(currentUserId);
             await removeFromWaitingRoom(partnerEntry.userId);
+
+            //add to history 
+            // await Connection.create({ users: [currentUserId, partnerEntry.userId] });
+            //
 
             return res.status(200).json(matchPayload);
             }

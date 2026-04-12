@@ -5,6 +5,7 @@ const reportSchema = new mongoose.Schema({
   reportedId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   report: String,
   images: [String],
+  ai : { type: Boolean, default: false } ,
   importance: { type: Number, default: 1 }
 }, { timestamps: true });
 

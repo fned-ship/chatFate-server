@@ -4,6 +4,7 @@ const fs       = require('fs');
 const { User, Interest } = require('../models/user');
 const {protect} = require("./auth");
 const { Chat, RandomChat, Message } = require('../models/chat');
+const mongoose = require('mongoose');
 
 // ── Multer setup ──────────────────────────────────────────────────────────────
 const UPLOAD_DIR = path.join(__dirname, '..', 'public', 'avatars');
@@ -151,175 +152,168 @@ const editInterests = async (req, res) => {
  * Send a friend request to another user.
  */
 const sendFriendRequest = async (req, res) => {
-  try {
-    const senderId   = req.user.id;
-    const { targetId } = req.params;
+    try {
+        const senderId = req.user.id;
+        const { targetId } = req.params;
 
-    if (senderId === targetId) {
-      return res.status(400).json({ message: 'You cannot send a friend request to yourself.' });
+        if (senderId === targetId) {
+            return res.status(400).json({ message: 'You cannot send a friend request to yourself.' });
+        }
+
+        const sId = new mongoose.Types.ObjectId(senderId);
+        const tId = new mongoose.Types.ObjectId(targetId);
+
+        const [sender, target] = await Promise.all([
+            User.findById(sId),
+            User.findById(tId)
+        ]);
+
+        if (!target) return res.status(404).json({ message: 'User not found.' });
+
+        // Check arrays using .some() and .equals() for ObjectId compatibility
+        if (sender.friends.some(id => id.equals(tId))) {
+            return res.status(409).json({ message: 'You are already friends.' });
+        }
+
+        if (target.requests.some(id => id.equals(sId))) {
+            return res.status(409).json({ message: 'Friend request already sent.' });
+        }
+
+        // Auto-accept if target already requested us
+        if (sender.requests.some(id => id.equals(tId))) {
+            await Promise.all([
+                User.findByIdAndUpdate(sId, {
+                    $addToSet: { friends: tId },
+                    $pull: { requests: tId }
+                }),
+                User.findByIdAndUpdate(tId, {
+                    $addToSet: { friends: sId },
+                    $pull: { requests: sId } // Clean up both sides
+                })
+            ]);
+
+            let chat = await Chat.findOne({
+                participants: { $all: [sId, tId], $size: 2 }
+            });
+
+            if (!chat) {
+                chat = await Chat.create({ participants: [sId, tId] });
+            }
+
+            return res.status(200).json({ message: 'Auto-accepted: You are now friends!' });
+        }
+
+        // Standard request
+        await User.findByIdAndUpdate(tId, { $addToSet: { requests: sId } });
+        res.status(200).json({ message: 'Friend request sent.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-
-    const [sender, target] = await Promise.all([
-      User.findById(senderId),
-      User.findById(targetId)
-    ]);
-
-    if (!target) return res.status(404).json({ message: 'User not found.' });
-
-    // Already friends?
-    if (sender.friends.map(String).includes(targetId)) {
-      return res.status(409).json({ message: 'You are already friends.' });
-    }
-
-    // Request already sent?
-    if (target.requests.map(String).includes(senderId)) {
-      return res.status(409).json({ message: 'Friend request already sent.' });
-    }
-
-    // Did the target already send us a request? → auto-accept
-    if (sender.requests.map(String).includes(targetId)) {
-      await Promise.all([
-        User.findByIdAndUpdate(senderId, {
-          $push: { friends: targetId },
-          $pull: { requests: targetId }
-        }),
-        User.findByIdAndUpdate(targetId, {
-          $push: { friends: senderId },
-          $pull: { requests: senderId }
-        })
-      ]);
-
-      let chat = await Chat.findOne({
-        participants: { $all: [senderId, targetId], $size: 2 }
-      });
-    
-      if (!chat) {
-        chat = await Chat.create({ participants: [senderId, targetId] });
-      }
-
-      return res.status(200).json({ message: 'You were already requested by this user — now friends!' });
-    }
-
-    // Add senderId to target's requests array
-    await User.findByIdAndUpdate(targetId, { $addToSet: { requests: senderId } });
-
-    res.status(200).json({ message: 'Friend request sent.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 };
 
 /**
  * POST /api/friends/accept/:requesterId
- * Accept a pending friend request.
  */
 const acceptFriendRequest = async (req, res) => {
-  try {
-    const userId       = req.user.id;
-    const { requesterId } = req.params;
+    try {
+        const userId = req.user.id;
+        const { requesterId } = req.params;
 
-    const user = await User.findById(userId);
+        const uId = new mongoose.Types.ObjectId(userId);
+        const rId = new mongoose.Types.ObjectId(requesterId);
 
-    // Check the request exists
-    if (!user.requests.map(String).includes(requesterId)) {
-      return res.status(404).json({ message: 'No friend request from this user.' });
-    }
+        // Atomic Update: Only proceed if rId is actually in the user's requests
+        const updatedUser = await User.findOneAndUpdate(
+            { _id: uId, requests: rId }, 
+            {
+                $addToSet: { friends: rId },
+                $pull: { requests: rId }
+            },
+            { returnDocument: 'after' } // Updated line
+        );
 
-    await Promise.all([
-      // Add each other as friends & remove the request
-      User.findByIdAndUpdate(userId, {
-        $push: { friends: requesterId },
-        $pull: { requests: requesterId }
-      }),
-      User.findByIdAndUpdate(requesterId, {
-        $push: { friends: userId }
-      })
-    ]);
-
-    //if (!participantId) return res.status(400).json({ message: 'participantId is required.' });
-        const participantId=requesterId ;
-        if (userId === participantId) return res.status(400).json({ message: 'Cannot chat with yourself.' });
-    
-        // Find existing chat between these two users
-        let chat = await Chat.findOne({
-          participants: { $all: [userId, participantId], $size: 2 }
-        });
-    
-        if (!chat) {
-          chat = await Chat.create({ participants: [userId, participantId] });
+        if (!updatedUser) {
+            return res.status(404).json({ message: 'Friend request not found or already processed.' });
         }
-    
+
+        // Update the requester's friend list
+        await User.findByIdAndUpdate(rId, {
+            $addToSet: { friends: uId }
+        });
+
+        // Chat logic
+        let chat = await Chat.findOne({
+            participants: { $all: [uId, rId], $size: 2 }
+        });
+
+        if (!chat) {
+            chat = await Chat.create({ participants: [uId, rId] });
+        }
+
         await chat.populate('participants', 'firstName lastName userName photo online');
 
-    res.status(200).json({ message: 'Friend request accepted.' , chat });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+        res.status(200).json({ message: 'Friend request accepted.', chat });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 };
 
 /**
  * DELETE /api/friends/request/:requesterId
- * Decline / delete a pending friend request.
  */
 const declineFriendRequest = async (req, res) => {
-  try {
-    const userId          = req.user.id;
-    const { requesterId } = req.params;
+    try {
+        const uId = new mongoose.Types.ObjectId(req.user.id);
+        const rId = new mongoose.Types.ObjectId(req.params.requesterId);
 
-    const user = await User.findById(userId);
+        const result = await User.updateOne(
+            { _id: uId },
+            { $pull: { requests: rId } }
+        );
 
-    if (!user.requests.map(String).includes(requesterId)) {
-      return res.status(404).json({ message: 'No friend request from this user.' });
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ message: 'Request not found.' });
+        }
+
+        res.status(200).json({ message: 'Friend request declined.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-
-    await User.findByIdAndUpdate(userId, { $pull: { requests: requesterId } });
-
-    res.status(200).json({ message: 'Friend request declined.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 };
 
 /**
  * DELETE /api/friends/:friendId
- * Remove an existing friend.
  */
 const removeFriend = async (req, res) => {
-  try {
-    const userId      = req.user.id;
-    const { friendId } = req.params;
+    try {
+        const uId = new mongoose.Types.ObjectId(req.user.id);
+        const fId = new mongoose.Types.ObjectId(req.params.friendId);
 
-    await Promise.all([
-      User.findByIdAndUpdate(userId,   { $pull: { friends: friendId } }),
-      User.findByIdAndUpdate(friendId, { $pull: { friends: userId   } })
-    ]);
+        await Promise.all([
+            User.findByIdAndUpdate(uId, { $pull: { friends: fId } }),
+            User.findByIdAndUpdate(fId, { $pull: { friends: uId } })
+        ]);
 
-    res.status(200).json({ message: 'Friend removed.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+        res.status(200).json({ message: 'Friend removed.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 };
+
 /**
  * GET /api/friends/requests
- * Get all pending friend requests for the logged-in user.
  */
 const getFriendRequests = async (req, res) => {
-  try {
-    const userId = req.user.id;
+    try {
+        const user = await User.findById(req.user.id)
+            .populate('requests', 'firstName lastName userName photo online');
 
-    // Find the user and populate the 'requests' array with specific fields
-    const user = await User.findById(userId)
-      .populate('requests', 'firstName lastName userName photo online');
+        if (!user) return res.status(404).json({ message: 'User not found.' });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found.' });
+        res.status(200).json(user.requests || []);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-
-    // Return the populated requests array (or an empty array if none)
-    res.status(200).json(user.requests || []);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 };
 
 // ── Router ────────────────────────────────────────────────────────────────────
