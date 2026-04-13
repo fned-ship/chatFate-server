@@ -24,6 +24,9 @@ const messageSchema = new mongoose.Schema({
 // Indexing for fast retrieval of a conversation's history
 messageSchema.index({ chatId: 1, createdAt: -1 });
 
+randomChatSchema.index({ hostId: 1, createdAt: -1 });
+randomChatSchema.index({ guestId: 1, createdAt: -1 });
+
 const Chat = mongoose.model('Chat', chatSchema);
 const RandomChat = mongoose.model('RandomChat', randomChatSchema);
 const Message = mongoose.model('Message', messageSchema);

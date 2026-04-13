@@ -316,6 +316,42 @@ const getFriendRequests = async (req, res) => {
     }
 };
 
+const getRandomChatHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Find all random chats where the user was a participant
+    const history = await RandomChat.find({
+      $or: [{ hostId: userId }, { guestId: userId }]
+    })
+    .sort({ createdAt: -1 }) // Get most recent chats first
+    .populate('hostId', 'userName photo country') // Populate host details
+    .populate('guestId', 'userName photo country'); // Populate guest details
+
+    // Transform the data so it's easier for the frontend to consume
+    const formattedHistory = history.map(chat => {
+      // Determine which participant is the "other" person
+      const isHost = chat.hostId._id.toString() === userId;
+      const otherUser = isHost ? chat.guestId : chat.hostId;
+
+      return {
+        randomChatId: chat._id,
+        dateTalked: chat.createdAt,
+        partner: {
+          _id: otherUser._id,
+          userName: otherUser.userName,
+          photo: otherUser.photo,
+          country: otherUser.country
+        },
+      };
+    });
+
+    res.status(200).json(formattedHistory);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const UserRoutes = (router) => {
   // Profile
@@ -328,6 +364,8 @@ const UserRoutes = (router) => {
   router.post  ('/api/friends/accept/:requesterId', protect , acceptFriendRequest);
   router.delete('/api/friends/request/:requesterId', protect , declineFriendRequest);
   router.delete('/api/friends/:friendId', protect , removeFriend);
+
+  router.get('/api/random-chats/history', protect, getRandomChatHistory);
 };
 
 module.exports = UserRoutes;

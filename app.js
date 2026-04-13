@@ -11,5 +11,6 @@ app.use(cors());
 app.use('/imagesProfile', express.static(path.join(__dirname, 'public/avatars')));
 app.use('/images', express.static(path.join(__dirname, 'public/images')));
 app.use('/files', express.static(path.join(__dirname, 'public/files')));
+app.use('/reports', express.static(path.join(__dirname, 'public/reports')));
 
 module.exports = app;

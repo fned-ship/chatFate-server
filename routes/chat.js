@@ -400,6 +400,33 @@ const deleteMessage = async (req, res) => {
   }
 };
 
+
+const getAllRandomChatMessages = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { randomChatId } = req.params;
+
+    const rc = await RandomChat.findById(randomChatId);
+    if (!rc) return res.status(404).json({ message: 'Random chat not found.' });
+
+    const participants = [rc.hostId.toString(), rc.guestId.toString()];
+    if (!participants.includes(userId)) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
+
+
+    const messages = await Message.find({ chatId: randomChatId, chatModel: 'RandomChat' })
+      .sort({ createdAt: 1 }) // 1 sorts in ascending order (oldest first)
+      .populate('sender', 'firstName lastName userName photo')
+      .populate('replyTo', 'text sender imagesFiles otherFiles');
+
+
+    res.status(200).json({ messages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const ChatRoutes = (router) => {
   const uploadFields = upload.fields([
@@ -418,6 +445,8 @@ const ChatRoutes = (router) => {
   router.get   ('/api/random-chats/:randomChatId/messages',protect,   getRandomChatMessages);
   router.post  ('/api/random-chats/:randomChatId/messages',protect,   uploadFields, sendRandomChatMessage);
   router.delete('/api/random-chats/:randomChatId',protect,            endRandomChat);
+
+  router.get   ('/api/random-chats/get-all-random-chat-messages',protect, getAllRandomChatMessages);
 
   // Messages (shared)
   router.put   ('/api/messages/:messageId/react',protect,  reactToMessage);

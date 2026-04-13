@@ -25,14 +25,15 @@ const ageFromDate = (birthDate) => {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 const Match = (router,client) => {
-    const addToWaitingRoom = async (user) => {
+    const addToWaitingRoom = async (user,typeOfChat) => {
         const entry = {
             userId:    user._id.toString(),
             birthDate: user.birthDate,
+            typeOfChat : typeOfChat ,
             interests: user.interests.map((i) => ({
             _id:      i._id.toString(),
             name:     i.name.toLowerCase(),
-            category: i.category.toLowerCase()
+            category: i.category.toLowerCase() ,
             }))
         };
         await client.hSet(WAITING_KEY, user._id.toString(), JSON.stringify(entry));
@@ -50,7 +51,7 @@ const Match = (router,client) => {
     }
 
 
-    const getCandidates = async (currentUser) => {
+    const getCandidates = async (currentUser,typeOfChat) => {
         const currentUserId = currentUser._id.toString();
 
         // 1. Fetch all userIds this user has already talked to
@@ -79,6 +80,8 @@ const Match = (router,client) => {
             if (talkedToIds.has(uid)) continue;
 
             let cand = JSON.parse(raw);
+            
+            if (cand.typeOfChat!=typeOfChat) continue ;
 
             // 4. Category logic
             if (sameCategory(currentUser.birthDate, cand.birthDate)) {
@@ -93,6 +96,7 @@ const Match = (router,client) => {
         try {
             const currentUserId = req.user.id;
             const io            = req.io;
+            let {typeOfChat} = req.body ;
 
             // ── 0. Fetch current user (Mongo) ────────────────────────────────────────
             const currentUser = await User.findById(currentUserId).populate('interests').select('-password -email -verificationToken');
@@ -113,11 +117,11 @@ const Match = (router,client) => {
             const myInterests = currentUser.interests;
 
             // ── 2. Add current user to waiting room (if not already there) ───────────
-            await addToWaitingRoom(currentUser);
+            await addToWaitingRoom(currentUser,typeOfChat);
 
             // ── 3. Core matching function ─────────────────────────────────────────────
             const performMatch = async () => {
-            const candidates = await getCandidates(currentUser);
+            const candidates = await getCandidates(currentUser,typeOfChat);
             // console.log('conds : ',candidates) ;
             if (candidates.length === 0) return null;
 
