@@ -27,7 +27,7 @@ messageSchema.index({ chatId: 1, createdAt: -1 });
 randomChatSchema.index({ hostId: 1, createdAt: -1 });
 randomChatSchema.index({ guestId: 1, createdAt: -1 });
 
-const Chat = mongoose.model('Chat', chatSchema);
+const Chat = mongoose.model('FriendsChat', chatSchema);
 const RandomChat = mongoose.model('RandomChat', randomChatSchema);
 const Message = mongoose.model('Message', messageSchema);
 
