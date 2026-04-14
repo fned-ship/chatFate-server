@@ -446,7 +446,7 @@ const ChatRoutes = (router) => {
   router.post  ('/api/random-chats/:randomChatId/messages',protect,   uploadFields, sendRandomChatMessage);
   router.delete('/api/random-chats/:randomChatId',protect,            endRandomChat);
 
-  router.get   ('/api/random-chats/get-all-random-chat-messages',protect, getAllRandomChatMessages);
+  router.get   ('/api/random-chats/get-all-messages/:randomChatId',protect, getAllRandomChatMessages);
 
   // Messages (shared)
   router.put   ('/api/messages/:messageId/react',protect,  reactToMessage);
