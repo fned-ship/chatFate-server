@@ -52,7 +52,7 @@ client.connect()
 
 const io = new Server(server, {
     cors: {
-        origin: clientDomainName,
+        origin: [clientDomainName,"https://chat-fate-app.vercel.app"],
         methods: ['GET', 'POST', 'PUT', 'DELETE'],
     },
 });
