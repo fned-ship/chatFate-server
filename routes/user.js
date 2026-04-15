@@ -352,11 +352,42 @@ const getRandomChatHistory = async (req, res) => {
   }
 };
 
+const getAllInterestsGrouped = async (req, res) => {
+  try {
+    // 1. Fetch all interests from the database
+    const allInterests = await Interest.find({});
+
+    // 2. Group them by category
+    const grouped = allInterests.reduce((acc, item) => {
+      const cat = item.category;
+      
+      // If the category doesn't exist in our accumulator, create it
+      if (!acc[cat]) {
+        acc[cat] = [];
+      }
+      
+      // Push the formatted interest object
+      acc[cat].push({
+        id: item._id,
+        name: item.name
+      });
+      
+      return acc;
+    }, {});
+
+    // 3. Return the grouped object
+    res.status(200).json(grouped);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const UserRoutes = (router) => {
   // Profile
   router.put('/api/profile', protect , upload.single('photo'), editProfile);
   router.put('/api/profile/interests', protect ,  editInterests);
+  router.get('/api/interests', getAllInterestsGrouped);
 
   // Friends
   router.get ('/api/friends/requests', protect, getFriendRequests);
