@@ -1,36 +1,34 @@
-const path    = require('path');
-const fs      = require('fs');
-const multer  = require('multer');
+const multer = require('multer');
+const path = require('path');
 const { Chat, RandomChat, Message } = require('../models/chat');
 const { User } = require('../models/user');
-const {protect} = require("./auth");
+const { protect } = require("./auth");
+const { putObject, deleteObject } = require("../s3Client.js");
 
-// ── Multer setup ──────────────────────────────────────────────────────────────
-const IMAGES_DIR = path.join(__dirname, '..', 'public','images');
-const FILES_DIR  = path.join(__dirname, '..', 'public','files');
+const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 
-[IMAGES_DIR, FILES_DIR].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const isImage = file.mimetype.startsWith('image/');
-    cb(null, isImage ? IMAGES_DIR : FILES_DIR);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
-  }
-});
+// ── Multer setup (Memory Storage for Vercel) ──────────────────────────────────
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 } // 20 MB per file
+  limits: { fileSize: 10 * 1024 * 1024 } // 10 MB per file (Adjusted for R2 testing)
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const PAGE_SIZE = 30;
+
+// Helper to upload multiple files to R2 and return keys
+const uploadToR2 = async (files, folder) => {
+  if (!files || files.length === 0) return [];
+  
+  return Promise.all(files.map(async (file) => {
+    const ext = path.extname(file.originalname);
+    const key = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`;
+    await putObject(BUCKET_NAME, key, file.buffer);
+    return key;
+  }));
+};
 
 const paginateMessages = async (chatId, chatModel, page = 1) => {
   const skip = (page - 1) * PAGE_SIZE;
@@ -38,39 +36,27 @@ const paginateMessages = async (chatId, chatModel, page = 1) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(PAGE_SIZE)
-    .populate('sender',  'firstName lastName userName photo')
+    .populate('sender', 'firstName lastName userName photo')
     .populate('replyTo', 'text sender imagesFiles otherFiles');
 };
 
 // ── FRIENDS CHAT ──────────────────────────────────────────────────────────────
 
-/**
- * POST /api/chats
- * Create or retrieve a 1-on-1 friend chat.
- * Body: { participantId }
- */
 const getOrCreateChat = async (req, res) => {
   try {
-    const userId        = req.user.id;
+    const userId = req.user.id;
     const { participantId } = req.body;
 
-    if (!participantId) return res.status(400).json({ message: 'participantId is required.' });
-    if (userId === participantId) return res.status(400).json({ message: 'Cannot chat with yourself.' });
+    if (!participantId || userId === participantId) 
+        return res.status(400).json({ message: 'Invalid participantId.' });
 
-    // Check they are friends
     const me = await User.findById(userId);
     if (!me.friends.map(String).includes(participantId)) {
       return res.status(403).json({ message: 'You can only chat with friends.' });
     }
 
-    // Find existing chat between these two users
-    let chat = await Chat.findOne({
-      participants: { $all: [userId, participantId], $size: 2 }
-    });
-
-    if (!chat) {
-      chat = await Chat.create({ participants: [userId, participantId] });
-    }
+    let chat = await Chat.findOne({ participants: { $all: [userId, participantId], $size: 2 } });
+    if (!chat) chat = await Chat.create({ participants: [userId, participantId] });
 
     await chat.populate('participants', 'firstName lastName userName photo online');
     res.status(200).json(chat);
@@ -79,112 +65,44 @@ const getOrCreateChat = async (req, res) => {
   }
 };
 
-/**
- * GET /api/chats
- * Get all friend chats for the current user.
- */
-const getMyChats = async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    const chats = await Chat.find({ participants: userId })
-      .populate('participants', 'firstName lastName userName photo online')
-      .sort({ updatedAt: -1 });
-
-    // Attach last message to each chat
-    const withLastMsg = await Promise.all(
-      chats.map(async (chat) => {
-        const lastMsg = await Message.findOne({ chatId: chat._id, chatModel: 'Chat' })
-          .sort({ createdAt: -1 })
-          .populate('sender', 'firstName lastName userName');
-        return { ...chat.toObject(), lastMessage: lastMsg };
-      })
-    );
-
-    res.status(200).json(withLastMsg);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-/**
- * GET /api/chats/:chatId/messages?page=1
- * Get paginated messages for a friend chat.
- */
-const getChatMessages = async (req, res) => {
-  try {
-    const userId  = req.user.id;
-    const { chatId } = req.params;
-    const page    = parseInt(req.query.page) || 1;
-
-    const chat = await Chat.findById(chatId);
-    if (!chat) return res.status(404).json({ message: 'Chat not found.' });
-
-    if (!chat.participants.map(String).includes(userId)) {
-      return res.status(403).json({ message: 'Access denied.' });
-    }
-
-    const messages = await paginateMessages(chatId, 'Chat', page);
-    res.status(200).json({ page, messages });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-/**
- * POST /api/chats/:chatId/messages
- * Send a message in a friend chat. Supports file uploads.
- * Fields: text, replyTo  |  Files: images[], files[]
- */
 const sendChatMessage = async (req, res) => {
   try {
-    const userId  = req.user.id;
+    const userId = req.user.id;
     const { chatId } = req.params;
     const { text, replyTo } = req.body;
 
     const chat = await Chat.findById(chatId);
-    if (!chat) return res.status(404).json({ message: 'Chat not found.' });
-
-    if (!chat.participants.map(String).includes(userId)) {
+    if (!chat || !chat.participants.map(String).includes(userId)) {
       return res.status(403).json({ message: 'Access denied.' });
     }
 
     const files = req.files || {};
-
-    const imagesFiles = (files['images'] || []).map(
-      f => f.filename
-    );
-    const otherFiles  = (files['files'] || []).map(
-      f => f.filename
-    );
+    
+    // Upload images and files to separate "folders" in R2
+    const imagesFiles = await uploadToR2(files['images'], 'images');
+    const otherFiles = await uploadToR2(files['files'], 'files');
 
     if (!text && imagesFiles.length === 0 && otherFiles.length === 0) {
-      return res.status(400).json({ message: 'Message must have text or at least one file.' });
+      return res.status(400).json({ message: 'Message cannot be empty.' });
     }
 
     const message = await Message.create({
       chatId,
       chatModel: 'Chat',
-      sender:    userId,
+      sender: userId,
       text,
-      replyTo:   replyTo || null,
+      replyTo: replyTo || null,
       imagesFiles,
       otherFiles
     });
 
-    // Bump chat updatedAt so it sorts to top
     await Chat.findByIdAndUpdate(chatId, { updatedAt: new Date() });
-
     await message.populate([
-      { path: 'sender',  select: 'firstName lastName userName photo' },
+      { path: 'sender', select: 'firstName lastName userName photo' },
       { path: 'replyTo', select: 'text sender imagesFiles otherFiles' }
     ]);
 
-    // Emit via socket (attached to req by middleware)
-    if (req.io) {
-      req.io.to(`chat:${chatId}`).emit('new_message', message);
-    }
-
+    if (req.io) req.io.to(`chat:${chatId}`).emit('new_message', message);
     res.status(201).json(message);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -193,151 +111,94 @@ const sendChatMessage = async (req, res) => {
 
 // ── RANDOM CHAT ───────────────────────────────────────────────────────────────
 
-/**
- * POST /api/random-chats
- * Create a random chat session between two matched users.
- * Body: { guestId }  (called by the host after match)
- */
-const createRandomChat = async (req, res) => {
-  try {
-    const hostId  = req.user.id;
-    const { guestId } = req.body;
-
-    if (!guestId) return res.status(400).json({ message: 'guestId is required.' });
-
-    const randomChat = await RandomChat.create({ hostId, guestId });
-    await randomChat.populate([
-      { path: 'hostId',  select: 'firstName lastName userName photo' },
-      { path: 'guestId', select: 'firstName lastName userName photo' }
-    ]);
-
-    res.status(201).json(randomChat);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-/**
- * GET /api/random-chats/:randomChatId/messages?page=1
- * Get paginated messages for a random chat.
- */
-const getRandomChatMessages = async (req, res) => {
-  try {
-    const userId         = req.user.id;
-    const { randomChatId } = req.params;
-    const page           = parseInt(req.query.page) || 1;
-
-    const rc = await RandomChat.findById(randomChatId);
-    if (!rc) return res.status(404).json({ message: 'Random chat not found.' });
-
-    const participants = [rc.hostId.toString(), rc.guestId.toString()];
-    if (!participants.includes(userId)) {
-      return res.status(403).json({ message: 'Access denied.' });
-    }
-
-    const messages = await paginateMessages(randomChatId, 'RandomChat', page);
-    res.status(200).json({ page, messages });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-/**
- * POST /api/random-chats/:randomChatId/messages
- * Send a message in a random chat. Supports file uploads.
- */
 const sendRandomChatMessage = async (req, res) => {
   try {
-    const userId         = req.user.id;
+    const userId = req.user.id;
     const { randomChatId } = req.params;
     const { text, replyTo } = req.body;
 
     const rc = await RandomChat.findById(randomChatId);
-    if (!rc) return res.status(404).json({ message: 'Random chat not found.' });
-
-    const participants = [rc.hostId.toString(), rc.guestId.toString()];
-    if (!participants.includes(userId)) {
+    if (!rc || ![rc.hostId.toString(), rc.guestId.toString()].includes(userId)) {
       return res.status(403).json({ message: 'Access denied.' });
     }
 
     const files = req.files || {};
-
-    const imagesFiles = (files['images'] || []).map(
-      f => f.filename
-    );
-    const otherFiles  = (files['files'] || []).map(
-      f => f.filename
-    );
-
-    if (!text && imagesFiles.length === 0 && otherFiles.length === 0) {
-      return res.status(400).json({ message: 'Message must have text or at least one file.' });
-    }
+    const imagesFiles = await uploadToR2(files['images'], 'images');
+    const otherFiles = await uploadToR2(files['files'], 'files');
 
     const message = await Message.create({
-      chatId:    randomChatId,
+      chatId: randomChatId,
       chatModel: 'RandomChat',
-      sender:    userId,
+      sender: userId,
       text,
-      replyTo:   replyTo || null,
+      replyTo: replyTo || null,
       imagesFiles,
       otherFiles
     });
 
     await message.populate([
-      { path: 'sender',  select: 'firstName lastName userName photo' },
+      { path: 'sender', select: 'firstName lastName userName photo' },
       { path: 'replyTo', select: 'text sender imagesFiles otherFiles' }
     ]);
 
-    if (req.io) {
-      req.io.to(`random:${randomChatId}`).emit('new_message', message);
-    }
-
+    if (req.io) req.io.to(`random:${randomChatId}`).emit('new_message', message);
     res.status(201).json(message);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
-/**
- * DELETE /api/random-chats/:randomChatId
- * End (delete) a random chat session and all its messages.
- */
-const endRandomChat = async (req, res) => {
+// ── CLEANUP / DELETE ─────────────────────────────────────────────────────────
+
+const deleteMessage = async (req, res) => {
   try {
-    const userId         = req.user.id;
-    const { randomChatId } = req.params;
+    const userId = req.user.id;
+    const { messageId } = req.params;
 
-    const rc = await RandomChat.findById(randomChatId);
-    if (!rc) return res.status(404).json({ message: 'Random chat not found.' });
+    const message = await Message.findById(messageId);
+    if (!message) return res.status(404).json({ message: 'Message not found.' });
+    if (message.sender.toString() !== userId) return res.status(403).json({ message: 'Denied.' });
 
-    const participants = [rc.hostId.toString(), rc.guestId.toString()];
-    if (!participants.includes(userId)) {
-      return res.status(403).json({ message: 'Access denied.' });
-    }
+    // Delete attached files from R2
+    const allFiles = [...message.imagesFiles, ...message.otherFiles];
+    await Promise.allSettled(allFiles.map(key => deleteObject(BUCKET_NAME, key)));
 
-    // Delete all messages belonging to this random chat
-    await Message.deleteMany({ chatId: randomChatId, chatModel: 'RandomChat' });
-    await RandomChat.findByIdAndDelete(randomChatId);
+    const room = message.chatModel === 'Chat' ? `chat:${message.chatId}` : `random:${message.chatId}`;
+    await Message.findByIdAndDelete(messageId);
 
-    if (req.io) {
-      req.io.to(`random:${randomChatId}`).emit('chat_ended', {
-        randomChatId,
-        message: 'The random chat session has ended.'
-      });
-    }
-
-    res.status(200).json({ message: 'Random chat ended and deleted.' });
+    if (req.io) req.io.to(room).emit('message_deleted', { messageId });
+    res.status(200).json({ message: 'Message deleted.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
-/**
- * PUT /api/messages/:messageId/react
- * Add or update a reaction on a message.
- * Body: { react: "👍" }
- */
-const reactToMessage = async (req, res) => {
+const endRandomChat = async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { randomChatId } = req.params;
+      const rc = await RandomChat.findById(randomChatId);
+      
+      if (!rc || ![rc.hostId.toString(), rc.guestId.toString()].includes(userId)) {
+        return res.status(403).json({ message: 'Access denied.' });
+      }
+  
+      // Find all messages to delete their R2 assets
+      const messages = await Message.find({ chatId: randomChatId, chatModel: 'RandomChat' });
+      const allKeys = messages.reduce((acc, m) => acc.concat(m.imagesFiles, m.otherFiles), []);
+      
+      await Promise.allSettled(allKeys.map(key => deleteObject(BUCKET_NAME, key)));
+      await Message.deleteMany({ chatId: randomChatId, chatModel: 'RandomChat' });
+      await RandomChat.findByIdAndDelete(randomChatId);
+  
+      if (req.io) req.io.to(`random:${randomChatId}`).emit('chat_ended', { randomChatId });
+      res.status(200).json({ message: 'Random chat ended.' });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  };
+
+  const reactToMessage = async (req, res) => {
   try {
     const { messageId } = req.params;
     const { react }     = req.body;
@@ -364,37 +225,85 @@ const reactToMessage = async (req, res) => {
   }
 };
 
-/**
- * DELETE /api/messages/:messageId
- * Delete a message (only by its sender).
- */
-const deleteMessage = async (req, res) => {
+const getRandomChatMessages = async (req, res) => {
   try {
-    const userId      = req.user.id;
-    const { messageId } = req.params;
+    const userId         = req.user.id;
+    const { randomChatId } = req.params;
+    const page           = parseInt(req.query.page) || 1;
 
-    const message = await Message.findById(messageId);
-    if (!message) return res.status(404).json({ message: 'Message not found.' });
+    const rc = await RandomChat.findById(randomChatId);
+    if (!rc) return res.status(404).json({ message: 'Random chat not found.' });
 
-    if (message.sender.toString() !== userId) {
-      return res.status(403).json({ message: 'You can only delete your own messages.' });
+    const participants = [rc.hostId.toString(), rc.guestId.toString()];
+    if (!participants.includes(userId)) {
+      return res.status(403).json({ message: 'Access denied.' });
     }
 
-    // Delete attached files from disk
-    [...message.imagesFiles, ...message.otherFiles].forEach(filePath => {
-      const abs = path.join(__dirname, '..', filePath);
-      fs.unlink(abs, err => { if (err && err.code !== 'ENOENT') console.error(err); });
-    });
+    const messages = await paginateMessages(randomChatId, 'RandomChat', page);
+    res.status(200).json({ page, messages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
 
-    const room = message.chatModel === 'Chat'
-      ? `chat:${message.chatId}`
-      : `random:${message.chatId}`;
+const createRandomChat = async (req, res) => {
+  try {
+    const hostId  = req.user.id;
+    const { guestId } = req.body;
 
-    await Message.findByIdAndDelete(messageId);
+    if (!guestId) return res.status(400).json({ message: 'guestId is required.' });
 
-    if (req.io) req.io.to(room).emit('message_deleted', { messageId });
+    const randomChat = await RandomChat.create({ hostId, guestId });
+    await randomChat.populate([
+      { path: 'hostId',  select: 'firstName lastName userName photo' },
+      { path: 'guestId', select: 'firstName lastName userName photo' }
+    ]);
 
-    res.status(200).json({ message: 'Message deleted.' });
+    res.status(201).json(randomChat);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getChatMessages = async (req, res) => {
+  try {
+    const userId  = req.user.id;
+    const { chatId } = req.params;
+    const page    = parseInt(req.query.page) || 1;
+
+    const chat = await Chat.findById(chatId);
+    if (!chat) return res.status(404).json({ message: 'Chat not found.' });
+
+    if (!chat.participants.map(String).includes(userId)) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
+
+    const messages = await paginateMessages(chatId, 'Chat', page);
+    res.status(200).json({ page, messages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getMyChats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const chats = await Chat.find({ participants: userId })
+      .populate('participants', 'firstName lastName userName photo online')
+      .sort({ updatedAt: -1 });
+
+    // Attach last message to each chat
+    const withLastMsg = await Promise.all(
+      chats.map(async (chat) => {
+        const lastMsg = await Message.findOne({ chatId: chat._id, chatModel: 'Chat' })
+          .sort({ createdAt: -1 })
+          .populate('sender', 'firstName lastName userName');
+        return { ...chat.toObject(), lastMessage: lastMsg };
+      })
+    );
+
+    res.status(200).json(withLastMsg);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -427,30 +336,29 @@ const getAllRandomChatMessages = async (req, res) => {
   }
 };
 
-// ── Router ────────────────────────────────────────────────────────────────────
+
 const ChatRoutes = (router) => {
   const uploadFields = upload.fields([
     { name: 'images', maxCount: 5 },
-    { name: 'files',  maxCount: 5 }
+    { name: 'files', maxCount: 5 }
   ]);
 
-  // Friend chats
-  router.post  ('/api/chats',protect,                      getOrCreateChat);
-  router.get   ('/api/chats',protect,                      getMyChats);
-  router.get   ('/api/chats/:chatId/messages',protect,     getChatMessages);
-  router.post  ('/api/chats/:chatId/messages',protect,     uploadFields, sendChatMessage);
 
-  // Random chats
-  router.post  ('/api/random-chats',protect,                          createRandomChat);
+
+  router.post('/api/chats', protect, getOrCreateChat);
+  router.get('/api/chats', protect, getMyChats);
+  router.get('/api/chats/:chatId/messages', protect, getChatMessages);
+  router.post('/api/chats/:chatId/messages', protect, uploadFields, sendChatMessage);
+
+  router.post('/api/random-chats', protect, createRandomChat);
   router.get   ('/api/random-chats/:randomChatId/messages',protect,   getRandomChatMessages);
-  router.post  ('/api/random-chats/:randomChatId/messages',protect,   uploadFields, sendRandomChatMessage);
-  router.delete('/api/random-chats/:randomChatId',protect,            endRandomChat);
+  router.post('/api/random-chats/:randomChatId/messages', protect, uploadFields, sendRandomChatMessage);
+  router.delete('/api/random-chats/:randomChatId', protect, endRandomChat);
 
   router.get   ('/api/random-chats/get-all-messages/:randomChatId',protect, getAllRandomChatMessages);
 
-  // Messages (shared)
-  router.put   ('/api/messages/:messageId/react',protect,  reactToMessage);
-  router.delete('/api/messages/:messageId',protect,        deleteMessage);
+  router.put('/api/messages/:messageId/react', protect,reactToMessage);
+  router.delete('/api/messages/:messageId', protect, deleteMessage);
 };
 
 module.exports = ChatRoutes;

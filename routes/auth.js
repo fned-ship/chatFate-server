@@ -6,23 +6,28 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { User } = require('../models/user');
 const transporter = require('../mailer');
+const { putObject, deleteObject } = require("../s3Client.js");
+
+
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const ClientDomainName = process.env.ClientDomainName;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, '../public/avatars');
-    if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
-    cb(null, uploadPath);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
-});
+const BUCKET_NAME = process.env.R2_BUCKET_NAME; // Ensure this is in your .env
 
-const upload = multer({ storage });
+const storage = multer.memoryStorage();
+
+const fileFilter = (_req, file, cb) => {
+  const allowed = /jpeg|jpg|png|webp/;
+  const isValid = allowed.test(file.mimetype) && allowed.test(path.extname(file.originalname).toLowerCase());
+  isValid ? cb(null, true) : cb(new Error('Only image files are allowed (jpeg, jpg, png, webp).'));
+};
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 2 * 1024 * 1024 } // Reduced to 2MB to stay under your 500MB limit longer
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -153,61 +158,83 @@ const Auth = (router) => {
   router.get( '/api/auth/verify/:token', verifyEmail);
 
   router.post('/api/auth/signup', upload.single('image'), async (req, res) => {
-    let data;
-    try { data = JSON.parse(req.body.data); }
-    catch { return res.status(400).json({ res: 'Invalid JSON in data' }); }
-
-    const file      = req.file;
-    const imagePath = file ? file.filename : 'persona.png';
-
-    try {
-      const existingUser = await User.findOne({
-        $or: [{ email: data.email }, { userName: data.userName }],
-      });
-
-      if (existingUser) {
-        if (file) {
-          const fp = path.join(__dirname, '../public/avatars', imagePath);
-          if (fs.existsSync(fp)) fs.unlinkSync(fp);
-        }
-        return res.status(400).json({ message: 'User already exists' });
+      let data;
+      try { 
+          data = JSON.parse(req.body.data); 
+      } catch { 
+          return res.status(400).json({ res: 'Invalid JSON in data' }); 
       }
 
-      const salt             = await bcrypt.genSalt(10);
-      const hashedPassword   = await bcrypt.hash(data.password, salt);
-      const verificationToken = crypto.randomBytes(32).toString('hex');
+      const file = req.file;
+      let imageKey = 'persona.png'; // Default if no image is uploaded
+      let uploadedToR2 = false;
 
-      const newUser = new User({
-        ...data,
-        photo: imagePath,
-        password: hashedPassword,
-        verificationToken,
-        isVerified: false,
-      });
+      try {
+          // 1. Check if user already exists BEFORE uploading to R2
+          const existingUser = await User.findOne({
+              $or: [{ email: data.email }, { userName: data.userName }],
+          });
 
-      await newUser.save();
+          if (existingUser) {
+              return res.status(400).json({ message: 'User already exists with this email or username' });
+          }
 
-      const verificationUrl = `${process.env.SERVER_URL}/api/auth/verify/${verificationToken}`;
+          // 2. If a file is provided, upload it to R2
+          if (file) {
+              const ext = path.extname(file.originalname);
+              // Prefix with avatars/ to keep the bucket organized
+              imageKey = `avatars/profile_${Date.now()}_${Math.random().toString(36).substring(7)}${ext}`;
+              
+              // This internally checks your 500MB limit
+              await putObject(BUCKET_NAME, imageKey, file.buffer);
+              uploadedToR2 = true;
+          }
 
-      await transporter.sendMail({
-        from: process.env.emailAdress,
-        to:   data.email,
-        subject: 'Verify your email address',
-        html: `
-          <h2>Welcome to ChatFate!</h2>
-          <p>Click below to verify your email address:</p>
-          <a href="${verificationUrl}" style="display:inline-block;padding:12px 24px;background:#6c63ff;color:#fff;border-radius:6px;text-decoration:none;">Verify Email</a>
-        `,
-      });
+          // 3. Hash password and create token
+          const salt = await bcrypt.genSalt(10);
+          const hashedPassword = await bcrypt.hash(data.password, salt);
+          const verificationToken = crypto.randomBytes(32).toString('hex');
 
-      res.status(201).json({ message: 'Check your email to verify your account.' });
-    } catch (error) {
-      if (file && imagePath !== 'persona.png') {
-        const fp = path.join(__dirname, '../public/avatars', imagePath);
-        if (fs.existsSync(fp)) fs.unlinkSync(fp);
+          // 4. Create New User
+          const newUser = new User({
+              ...data,
+              photo: imageKey,
+              password: hashedPassword,
+              verificationToken,
+              isVerified: false,
+          });
+
+          await newUser.save();
+
+          // 5. Send Verification Email
+          const verificationUrl = `${process.env.SERVER_URL}/api/auth/verify/${verificationToken}`;
+          await transporter.sendMail({
+              from: process.env.emailAdress,
+              to: data.email,
+              subject: 'Verify your email address',
+              html: `
+                  <h2>Welcome to ChatFate!</h2>
+                  <p>Click below to verify your email address:</p>
+                  <a href="${verificationUrl}" style="padding:12px 24px; background:#6c63ff; color:#fff; border-radius:6px; text-decoration:none;">Verify Email</a>
+              `,
+          });
+
+          res.status(201).json({ message: 'Check your email to verify your account.' });
+
+      } catch (error) {
+          // 6. Cleanup R2 if MongoDB save or Email fails
+          if (uploadedToR2 && imageKey !== 'persona.png') {
+              console.log("Signup failed, deleting uploaded avatar from R2...");
+              await deleteObject(BUCKET_NAME, imageKey).catch(e => console.error("Cleanup error:", e));
+          }
+
+          // Specific handling for your 500MB limit error
+          if (error.message.includes("limit reached")) {
+              return res.status(507).json({ error: error.message });
+          }
+
+          return res.status(500).json({ error: error.message });
       }
-      return res.status(500).json({ error: error.message });
-    }
   });
 
   // Forgot / reset password

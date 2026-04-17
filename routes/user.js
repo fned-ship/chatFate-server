@@ -1,95 +1,92 @@
-const multer   = require('multer');
-const path     = require('path');
-const fs       = require('fs');
-const { User, Interest } = require('../models/user');
-const {protect} = require("./auth");
-const { Chat, RandomChat, Message } = require('../models/chat');
+const multer = require('multer');
+const path = require('path');
+const { User , Interest  } = require('../models/user');
 const mongoose = require('mongoose');
+// Import your R2 helper functions
+const { putObject, deleteObject } = require("../s3Client.js");
+const { protect } = require("./auth");
+const { Chat, RandomChat, Message } = require('../models/chat');
 
-// ── Multer setup ──────────────────────────────────────────────────────────────
-const UPLOAD_DIR = path.join(__dirname, '..', 'public', 'avatars');
-
-// Ensure upload directory exists
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename:    (req, file, cb) => {
-    const ext      = path.extname(file.originalname);
-    const filename = `profile_${req.user.id}_${Date.now()}${ext}`;
-    cb(null, filename);
-  }
-});
+// ── Multer setup (Memory Storage) ─────────────────────────────────────────────
+// We use memoryStorage because Vercel has a read-only file system.
+const storage = multer.memoryStorage();
 
 const fileFilter = (_req, file, cb) => {
   const allowed = /jpeg|jpg|png|webp/;
-  const isValid  = allowed.test(file.mimetype) && allowed.test(path.extname(file.originalname).toLowerCase());
+  const isValid = allowed.test(file.mimetype) && allowed.test(path.extname(file.originalname).toLowerCase());
   isValid ? cb(null, true) : cb(new Error('Only image files are allowed (jpeg, jpg, png, webp).'));
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5 MB
+  limits: { fileSize: 2 * 1024 * 1024 } // Reduced to 2MB to stay under your 500MB limit longer
 });
 
-// ── Helper: delete file from disk ─────────────────────────────────────────────
-const deleteFile = (filePath) => {
-  if (!filePath) return;
-  const abs = path.join(__dirname, '..', 'public', 'avatars', filePath);
-  fs.unlink(abs, (err) => {
-    if (err && err.code !== 'ENOENT') console.error('File delete error:', err);
-  });
-};
-
+const BUCKET_NAME = process.env.R2_BUCKET_NAME; // Ensure this is in your .env
 
 // ── Controllers ───────────────────────────────────────────────────────────────
 
 /**
  * PUT /api/profile
- * Edit profile information. Accepts multipart/form-data.
- * Fields: firstName, lastName, userName, birthDate, country, sex
- * File:   photo (optional)
  */
 const editProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user   = await User.findById(userId);
+    const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: 'User not found.' });
 
     const { firstName, lastName, userName, birthDate, country, sex } = req.body;
 
-
-    // Only update fields that were actually sent
+    // 1. Update basic fields
     if (firstName) user.firstName = firstName;
-    if (lastName)  user.lastName  = lastName;
-    if (sex)       user.sex       = sex;
-    if (country)   user.country   = country;
+    if (lastName) user.lastName = lastName;
+    if (sex) user.sex = sex;
+    if (country) user.country = country;
     if (birthDate) user.birthDate = new Date(birthDate);
 
-    // Username uniqueness check
+    // 2. Username uniqueness check
     if (userName && userName !== user.userName) {
       const taken = await User.findOne({ userName, _id: { $ne: userId } });
       if (taken) {
-        // Rollback uploaded file if username is taken
-        if (req.file) deleteFile(user.photo);
         return res.status(409).json({ message: 'Username is already taken.' });
       }
       user.userName = userName;
     }
 
-
+    // 3. Image Upload to R2
     if (req.file) {
-      deleteFile(user.photo);
-      user.photo = req.file.filename;
+      const ext = path.extname(req.file.originalname);
+      const filename = `avatars/profile_${userId}_${Date.now()}${ext}`;
+
+      // Delete old photo from R2 if it exists
+      if (user.photo && user.photo.startsWith('avatars/')) {
+        await deleteObject(BUCKET_NAME, user.photo).catch(err => 
+          console.error("Old file deletion failed:", err)
+        );
+      }
+
+      // Upload new photo to R2
+      // putObject now internally checks your 500MB limit!
+      await putObject(BUCKET_NAME, filename, req.file.buffer);
+      
+      // Store the key/filename in the database
+      user.photo = filename;
     }
 
     await user.save();
 
     const { password, verificationToken, ...safeUser } = user.toObject();
-    res.status(200).json({ message: 'Profile updated successfully.', user: safeUser });
+    res.status(200).json({ 
+        message: 'Profile updated successfully.', 
+        user: safeUser,
+        // Note: In frontend, you'll access the image via your R2 Public URL + user.photo
+    });
+
   } catch (error) {
-    // If Mongo throws a duplicate key error (e.g. userName)
+    if (error.message.includes("limit reached")) {
+        return res.status(507).json({ message: error.message });
+    }
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Username or email is already in use.' });
     }
