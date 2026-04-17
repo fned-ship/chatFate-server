@@ -207,7 +207,7 @@ const Auth = (router) => {
           await newUser.save();
 
           // 5. Send Verification Email
-          const verificationUrl = `${process.env.SERVER_URL}/api/auth/verify/${verificationToken}`;
+          const verificationUrl = `${process.env.serverURL}/api/auth/verify/${verificationToken}`;
           await transporter.sendMail({
               from: process.env.emailAdress,
               to: data.email,
