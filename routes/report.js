@@ -245,26 +245,26 @@ const takeAction = async (req, res) => {
                 $set: { banDate: new Date(), banPeriod: days, numOfReports: 0 }
             });
 
-            // await Promise.allSettled([
-            //     sendMail(
-            //     victim.email,
-            //     'Update on your report',
-            //     `<p>Hi ${victim.firstName},</p>
-            //     <p>Our moderation team has reviewed your report. The reported user's
-            //         account has been <strong>suspended for ${days} day(s)</strong>
-            //         (until ${banEnd.toDateString()}). Thank you for your report.</p>`
-            //     ),
-            //     sendMail(
-            //     reported.email,
-            //     'Your account has been suspended',
-            //     `<p>Hi ${reported.firstName},</p>
-            //     <p>Following a moderation review, your account has been
-            //         <strong>suspended for ${days} day(s)</strong>
-            //         (until ${banEnd.toDateString()}).</p>
-            //     <p>Reason: violation of community guidelines based on reports received.</p>
-            //     <p>If you believe this is a mistake, please contact our support team.</p>`
-            //     )
-            // ]);
+            await Promise.allSettled([
+                sendMail(
+                victim.email,
+                'Update on your report',
+                `<p>Hi ${victim.firstName},</p>
+                <p>Our moderation team has reviewed your report. The reported user's
+                    account has been <strong>suspended for ${days} day(s)</strong>
+                    (until ${banEnd.toDateString()}). Thank you for your report.</p>`
+                ),
+                sendMail(
+                reported.email,
+                'Your account has been suspended',
+                `<p>Hi ${reported.firstName},</p>
+                <p>Following a moderation review, your account has been
+                    <strong>suspended for ${days} day(s)</strong>
+                    (until ${banEnd.toDateString()}).</p>
+                <p>Reason: violation of community guidelines based on reports received.</p>
+                <p>If you believe this is a mistake, please contact our support team.</p>`
+                )
+            ]);
 
             // Delete ONLY the specific report that was processed
             deleteReportImages(report);
