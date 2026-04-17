@@ -1,16 +1,16 @@
 const nodemailer = require("nodemailer");
-const dotenv =require('dotenv');
+const dotenv = require('dotenv');
 dotenv.config();
 
-
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com", // Replace with your email provider's SMTP server
-  port: 465, // Replace with your email provider's port (usually 587 for TLS)
-  secure: true, // true for 465, false for other ports
+  service: 'gmail',
   auth: {
-    user: process.env.emailAdress, // Replace with your email address
-    pass: process.env.emailPass, // Replace with your email password or app-specific password
+    type: 'OAuth2',
+    user: process.env.emailAdress, // Your Gmail address
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
   },
 });
 
-module.exports=transporter ;
+module.exports = transporter;
