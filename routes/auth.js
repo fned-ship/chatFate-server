@@ -166,7 +166,7 @@ const Auth = (router) => {
       }
 
       const file = req.file;
-      let imageKey = 'persona.png'; // Default if no image is uploaded
+      let imageKey = 'avatars/persona.png'; // Default if no image is uploaded
       let uploadedToR2 = false;
 
       try {
@@ -223,7 +223,7 @@ const Auth = (router) => {
 
       } catch (error) {
           // 6. Cleanup R2 if MongoDB save or Email fails
-          if (uploadedToR2 && imageKey !== 'persona.png') {
+          if (uploadedToR2 && imageKey !== 'avatars/persona.png') {
               console.log("Signup failed, deleting uploaded avatar from R2...");
               await deleteObject(BUCKET_NAME, imageKey).catch(e => console.error("Cleanup error:", e));
           }
@@ -233,7 +233,7 @@ const Auth = (router) => {
               return res.status(507).json({ error: error.message });
           }
 
-          return res.status(500).json({ error: error.message });
+          return res.status(503).json({ error: error.message });
       }
   });
 
